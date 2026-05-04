@@ -7,32 +7,21 @@
 #include <linux/netdevice.h>
 #include <linux/inetdevice.h> 
 #include <linux/in.h>  
-#include <linux/uuid.h>
 #include <linux/timer.h>
-
-
-struct task_data 
-{
-    struct tasklet_struct tasklet;
-    struct sk_buff *skb;
-};
+#include <linux/random.h>
+#include "transfer.h"
+#include "global.h"
+#include "transfer.h"
+#include "nodes.h"
 
 struct device_info 
 {
     struct net_device *dev;            
     uint32_t ip;
-    uint32_t broadcast;   
+    uint32_t broadcast;
     struct list_head node;  
 };
 
-#pragma pack(push, 1)
-struct header_messager 
-{
-    uint16_t magic;
-    uint32_t id;
-    uint8_t type;
-};
-#pragma pack(pop)
 
 LIST_HEAD(list_dev);
 
@@ -43,113 +32,16 @@ MODULE_AUTHOR("Kormi Ka");
 MODULE_DESCRIPTION("A simple example Linux module.");
 MODULE_VERSION("0.01");
 static int max_size = 32; 
-static const int ttl = 10; 
-static const int port = 9977; 
+const int ttl = 10; 
+const int port = 9977; 
 static const uint16_t magic = 0xFACB;
-static uint32_t id = 1243464;  
+static uint32_t id;  
 static struct timer_list timer;
 static const uint8_t eth_broacast[ETH_ALEN] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
 
 module_param(max_size, int, 0644);
 MODULE_PARM_DESC(my_int, "Max size out packet");
-
-void send_func (unsigned long d)
-{
-    struct task_data *data = (struct task_data *)d;
-    struct sk_buff* skb = data->skb;
-
-    if (dev_queue_xmit(skb) != 0) 
-    {
-        pr_err("dev_queue_xmit failed\n");
-        kfree_skb(skb);
-    }
-    kfree (data);
-}
-
-void send_messeg (struct net_device *dev,
-                        uint32_t ttl, 
-                        uint32_t ip_saddr, 
-                        uint32_t ip_daddr, 
-                        uint8_t* eth_daddr,
-                        struct header_messager* header_in,
-                        uint8_t* data, 
-                        uint32_t size)
-{
-    pr_info("start send_messeg\n");
-    int packet_size = sizeof(struct ethhdr) 
-                    + sizeof(struct iphdr) 
-                    + sizeof(struct udphdr)
-                    + sizeof(struct header_messager)
-                    + size;
-    
-    int hh_len = LL_RESERVED_SPACE(dev);
-    int tlen = dev->needed_tailroom;
-    struct sk_buff* skb = netdev_alloc_skb(dev, hh_len + tlen + packet_size);
-
-    if (!skb) 
-    {
-        pr_err("netdev_alloc_skb failed\n");
-        return;
-    }
-
-    skb_reserve(skb, hh_len);
-    skb->dev = dev;
-    skb->protocol = htons(ETH_P_IP);
-    skb_put(skb, packet_size);
-    skb_reset_network_header(skb);
-    skb_set_transport_header(skb, sizeof(struct iphdr));
-    
-    struct iphdr* ip_out = ip_hdr(skb);
-    ip_out->version = 4;
-    ip_out->ihl = 5;
-    ip_out->tos = 0;
-    ip_out->tot_len = htons(packet_size - sizeof(struct ethhdr));
-    ip_out->id = 0;
-    ip_out->frag_off = htons(0x4000);
-    ip_out->ttl = ttl;
-    ip_out->protocol = IPPROTO_UDP;
-    ip_out->saddr = ip_saddr;
-    ip_out->daddr = ip_daddr;
-    ip_out->check = 0;
-    ip_out->check = ip_fast_csum((u8 *)ip_out, ip_out->ihl);
-
-    struct udphdr* udp_out = udp_hdr(skb);
-
-    udp_out->source = htons(port);
-    udp_out->dest = htons(port);
-    udp_out->len = htons(sizeof(struct udphdr)+ sizeof(struct header_messager) + size);
-    udp_out->check = 0;
-    struct header_messager* header_out = (struct header_messager*)(udp_out + 1);
-    memcpy (header_out, header_in, sizeof (struct header_messager));
-
-    if (size > 0 && data)
-    {
-        uint8_t* data_out = (uint8_t*)(header_out + 1);
-        memcpy (data_out, data, size);
-    }
-    
-    skb_push(skb, sizeof(struct ethhdr));
-    skb_reset_mac_header(skb);
-    
-    struct ethhdr *eth_out = eth_hdr(skb);
-    memset(eth_out, 0, sizeof(struct ethhdr));
-    memcpy(eth_out->h_source, dev->dev_addr , ETH_ALEN);
-    memcpy(eth_out->h_dest, eth_daddr, ETH_ALEN);
-    eth_out->h_proto = htons(ETH_P_IP);
-
-    struct task_data *task = kmalloc(sizeof(struct task_data), GFP_KERNEL);
-    if (!task)
-    {
-        kfree_skb(skb);
-        return;
-    }
-    task->skb = skb;
-    tasklet_init(&task->tasklet, send_func, (unsigned long)task);
-    tasklet_schedule(&task->tasklet);
-    pr_info("end send_messeg\n");
-}
-
 
 
 static unsigned int input_hook (void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
@@ -160,7 +52,7 @@ static unsigned int input_hook (void *priv, struct sk_buff *skb, const struct nf
     
     struct ethhdr *eth_in = eth_hdr(skb);    
     struct udphdr *udp_in = udp_hdr(skb);
-    pr_info("get udp from ip:%pI4 mac %*ph:\n", &iph->saddr, sizeof(eth_in->h_source),eth_in->h_source);
+    //pr_info("get udp from ip:%pI4 mac %*ph:\n", &iph->saddr, sizeof(eth_in->h_source),eth_in->h_source);
     
     if (udp_in->dest != htons(port))
         return NF_ACCEPT;
@@ -188,6 +80,11 @@ static unsigned int input_hook (void *priv, struct sk_buff *skb, const struct nf
                 printk("Replase Hello Messeger device name: %s, ip:%pI4 broadcat:%pI4\n", info->dev->name, &info->ip, &info->broadcast); 
             }
         }
+        client_update (skb->dev,
+                   ntohl(header->id), 
+                   iph->saddr, 
+                   eth_in->h_source, 
+                   iph->ttl - 1);
         pr_info("get hello messeger from ip:%pI4 id:%d\n", &iph->saddr, ntohl(header->id));
     }
 
@@ -236,6 +133,7 @@ static int __init init (void)
     struct net_device *dev;
     struct net *net = &init_net;
     int count = 0;
+    id = get_random_u32();
 
     rcu_read_lock();
 
@@ -260,7 +158,7 @@ static int __init init (void)
             continue;
 
         INIT_LIST_HEAD(&info->node);
-
+        
         info->dev = dev;
         info->ip = ifa->ifa_address;
         info->broadcast = ifa->ifa_broadcast;
@@ -270,10 +168,10 @@ static int __init init (void)
     }
     rcu_read_unlock();
     send_greetings ();
+    clients_init ();
     timer_setup(&timer, timer_callback, 0);
     timer.expires = jiffies + msecs_to_jiffies(10000); 
     add_timer(&timer);
-
     
     return 0;
 }
@@ -289,6 +187,7 @@ static void __exit exit (void)
         list_del(&ptr->node);
         kfree(ptr);
     }
+    clients_deinit ();
     del_timer(&timer);
     printk(KERN_INFO "Goodbye, World!\n");
 }

@@ -81,6 +81,7 @@ void send_messeg (struct net_device *dev,
 
     if (size > 0 && data)
     {
+        pr_info("start copy\n");
         uint8_t* data_out = (uint8_t*)(header_out + 1);
         memcpy (data_out, data, size);
     }

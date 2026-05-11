@@ -12,5 +12,6 @@ struct header_messager
 
 extern const int port;
 extern const int ttl; 
+extern const uint16_t magic;
 
 #endif

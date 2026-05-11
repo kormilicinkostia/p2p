@@ -11,8 +11,8 @@
 #include <linux/random.h>
 #include "transfer.h"
 #include "global.h"
-#include "transfer.h"
 #include "nodes.h"
+#include "dev.h"
 
 struct device_info 
 {
@@ -34,7 +34,7 @@ MODULE_VERSION("0.01");
 static int max_size = 32; 
 const int ttl = 10; 
 const int port = 9977; 
-static const uint16_t magic = 0xFACB;
+const uint16_t magic = 0xFACB;
 static uint32_t id;  
 static struct timer_list timer;
 static const uint8_t eth_broacast[ETH_ALEN] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
@@ -65,6 +65,7 @@ static unsigned int input_hook (void *priv, struct sk_buff *skb, const struct nf
     if (header->type == 0)
     {
         struct device_info* info;
+        uint32_t ip;
         list_for_each_entry(info, &list_dev, node) 
         {
             if (info->dev != skb->dev)
@@ -79,16 +80,35 @@ static unsigned int input_hook (void *priv, struct sk_buff *skb, const struct nf
                             0);
                 printk("Replase Hello Messeger device name: %s, ip:%pI4 broadcat:%pI4\n", info->dev->name, &info->ip, &info->broadcast); 
             }
+            else
+            {
+                ip = info->ip;
+            }
         }
         client_update (skb->dev,
-                   ntohl(header->id), 
+                   ntohl(header->id),
+                   ip, 
                    iph->saddr, 
                    eth_in->h_source, 
                    iph->ttl - 1);
         pr_info("get hello messeger from ip:%pI4 id:%d\n", &iph->saddr, ntohl(header->id));
     }
+    if (header->type == 1)
+    {
+        uint8_t* data_in = (uint8_t*)(header + 1);
+        uint32_t size = ntohs(udp_in->len) - sizeof(struct udphdr) -  sizeof(struct header_messager);
 
-    
+        if (header->id == htonl(id))
+        {
+            pr_info("Data netvork: %*ph\n", (int)size, data_in);
+            dev_send (data_in, size);
+        }
+        else
+        {
+            pr_info("Replase netvork: %*ph\n", (int)size, data_in);
+            clients_send(header->id , data_in, size);
+        }
+    }
     return NF_ACCEPT;
 }
 struct header_messager header_global;
@@ -129,12 +149,12 @@ static int __init init (void)
     inputHook.pf = PF_INET;
     inputHook.priority = NF_IP_PRI_FIRST;
     nf_register_net_hook(&init_net, &inputHook);
-    printk(KERN_INFO "Hello, World!\n");
+    
     struct net_device *dev;
     struct net *net = &init_net;
     int count = 0;
     id = get_random_u32();
-
+    printk(KERN_INFO "Hello, World! %u\n", id);
     rcu_read_lock();
 
     /* Обход всех сетевых интерфейсов в пространстве имен */
@@ -172,7 +192,7 @@ static int __init init (void)
     timer_setup(&timer, timer_callback, 0);
     timer.expires = jiffies + msecs_to_jiffies(10000); 
     add_timer(&timer);
-    
+    dev_init ();
     return 0;
 }
 
@@ -189,6 +209,7 @@ static void __exit exit (void)
     }
     clients_deinit ();
     del_timer(&timer);
+    dev_deinit ();
     printk(KERN_INFO "Goodbye, World!\n");
 }
 

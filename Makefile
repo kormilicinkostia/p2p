@@ -1,5 +1,5 @@
 obj-m := p2p.o
-p2p-y := main.o transfer.o nodes.o
+p2p-y := main.o transfer.o nodes.o dev.o
 
 PWD := $(CURDIR)
 all:
